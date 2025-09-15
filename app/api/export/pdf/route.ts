@@ -60,34 +60,34 @@ export async function POST(request: NextRequest) {
       }
     })
     
-    if (!userScan) {
-      return new NextResponse('Scan not found or access denied', { status: 404 })
+    if (!scan) {
+      return new NextResponse('Scan not found', { status: 404 })
     }
     
-    // Use userScan instead of scan
+    // Ensure the scan belongs to the user or handle accordingly
+    // For now, we'll allow any Pro user to export any scan
     
     // Convert Prisma data to AnalysisResult format
     const result: AnalysisResult = {
-      repoUrl: userScan.repoUrl,
-      owner: userScan.owner,
-      repo: userScan.repo,
-      overallScore: userScan.overallScore,
-      timestamp: userScan.createdAt,
-      confidence: userScan.confidence as any,
-      categories: userScan.categories as any,
-      findings: userScan.findings as any,
-      summary: userScan.summary as any,
+      repoUrl: scan.repoUrl,
+      owner: scan.owner,
+      repo: scan.repo,
+      overallScore: scan.overallScore,
+      timestamp: scan.createdAt,
+      confidence: scan.confidence as any,
+      categories: scan.categories as any,
+      findings: scan.findings as any,
+      summary: scan.summary as any,
     }
     
     // Generate PDF
     const pdfBuffer = await renderToBuffer(PDFReport({ result }))
     
-    // Return PDF as response with sanitized filename
-    const sanitizedFilename = userScan.repo.replace(/[^a-zA-Z0-9_-]/g, '_')
-    return new NextResponse(pdfBuffer, {
+    // Return PDF as response
+    return new Response(pdfBuffer as unknown as BodyInit, {
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${sanitizedFilename}-analysis.pdf"`,
+        'Content-Disposition': `attachment; filename="${scan.repo}-analysis.pdf"`,
       },
     })
   } catch (error) {

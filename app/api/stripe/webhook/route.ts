@@ -37,14 +37,15 @@ export async function POST(request: NextRequest) {
           
           // Create subscription record
           if (session.subscription) {
-            const subscription = await stripe.subscriptions.retrieve(session.subscription as string)
+            const subscriptionId = session.subscription as string
+            const subscription = await stripe.subscriptions.retrieve(subscriptionId)
             
             await prisma.subscription.create({
               data: {
                 userId: session.metadata.userId,
                 stripeSubscriptionId: subscription.id,
                 stripePriceId: subscription.items.data[0].price.id,
-                stripeCurrentPeriodEnd: new Date(subscription.current_period_end * 1000),
+                stripeCurrentPeriodEnd: new Date((subscription as any).current_period_end * 1000),
                 status: subscription.status as any,
               }
             })
@@ -60,7 +61,7 @@ export async function POST(request: NextRequest) {
           where: { stripeSubscriptionId: subscription.id },
           data: {
             status: subscription.status as any,
-            stripeCurrentPeriodEnd: new Date(subscription.current_period_end * 1000),
+            stripeCurrentPeriodEnd: new Date((subscription as any).current_period_end * 1000),
           }
         })
         
@@ -96,7 +97,7 @@ export async function POST(request: NextRequest) {
         
         // Handle failed payment
         const subscription = await prisma.subscription.findUnique({
-          where: { stripeSubscriptionId: invoice.subscription as string }
+          where: { stripeSubscriptionId: (invoice as any).subscription as string }
         })
         
         if (subscription) {

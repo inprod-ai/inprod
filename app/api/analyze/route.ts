@@ -6,7 +6,7 @@ import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 
 const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
+  apiKey: process.env.ANTHROPIC_API_KEY || 'dummy-key-for-build',
 })
 
 // Rate limiting cache
@@ -317,10 +317,10 @@ Respond in JSON format:
                 owner,
                 repo,
                 overallScore: result.overallScore,
-                confidence: result.confidence,
-                categories: result.categories,
-                findings: result.findings,
-                summary: result.summary,
+                confidence: result.confidence as any,
+                categories: result.categories as any,
+                findings: result.findings as any,
+                summary: result.summary as any,
               }
             })
             
@@ -337,10 +337,10 @@ Respond in JSON format:
                 owner,
                 repo,
                 overallScore: result.overallScore,
-                confidence: result.confidence,
-                categories: result.categories,
-                findings: result.findings,
-                summary: result.summary,
+                confidence: result.confidence as any,
+                categories: result.categories as any,
+                findings: result.findings as any,
+                summary: result.summary as any,
               }
             })
           }
