@@ -125,7 +125,7 @@ export default function AnalysisScreen({ repoUrl }: Props) {
             Back
           </motion.button>
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-blue-500 rounded-lg flex items-center justify-center">
+            <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-green-600 rounded-lg flex items-center justify-center">
               <CheckCircle className="w-5 h-5 text-white" />
             </div>
             <span className="font-bold text-xl">inprod.ai</span>
