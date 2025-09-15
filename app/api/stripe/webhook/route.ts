@@ -3,22 +3,41 @@ import { stripe } from '@/lib/stripe'
 import { prisma } from '@/lib/prisma'
 import Stripe from 'stripe'
 
+// Validate required environment variables
+if (!process.env.STRIPE_WEBHOOK_SECRET) {
+  throw new Error('STRIPE_WEBHOOK_SECRET is required for webhook security')
+}
+
 export async function POST(request: NextRequest) {
-  const body = await request.text()
-  const signature = request.headers.get('stripe-signature')!
-  
-  let event: Stripe.Event
-  
   try {
-    event = stripe.webhooks.constructEvent(
-      body,
-      signature,
-      process.env.STRIPE_WEBHOOK_SECRET!
-    )
-  } catch (error) {
-    console.error('Webhook signature verification failed:', error)
-    return new NextResponse('Invalid signature', { status: 400 })
-  }
+    // Validate request size
+    const contentLength = request.headers.get('content-length')
+    if (contentLength && parseInt(contentLength) > 1024 * 1024) { // 1MB limit
+      return new NextResponse('Request too large', { status: 413 })
+    }
+
+    const body = await request.text()
+    const signature = request.headers.get('stripe-signature')
+    
+    if (!signature) {
+      return new NextResponse('Missing Stripe signature', { status: 400 })
+    }
+    
+    let event: Stripe.Event
+    
+    try {
+      event = stripe.webhooks.constructEvent(
+        body,
+        signature,
+        process.env.STRIPE_WEBHOOK_SECRET
+      )
+    } catch (error) {
+      console.error('Webhook signature verification failed:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      })
+      return new NextResponse('Invalid signature', { status: 400 })
+    }
   
   try {
     switch (event.type) {
@@ -112,7 +131,18 @@ export async function POST(request: NextRequest) {
     
     return new NextResponse('Webhook processed', { status: 200 })
   } catch (error) {
-    console.error('Webhook processing error:', error)
+    console.error('Webhook processing error:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      eventType: event?.type || 'unknown',
+      timestamp: new Date().toISOString()
+    })
     return new NextResponse('Webhook processing failed', { status: 500 })
+  }
+  } catch (outerError) {
+    console.error('Webhook outer error:', {
+      error: outerError instanceof Error ? outerError.message : 'Unknown error',
+      timestamp: new Date().toISOString()
+    })
+    return new NextResponse('Invalid request', { status: 400 })
   }
 }

@@ -4,6 +4,17 @@ import { PrismaAdapter } from "@auth/prisma-adapter"
 import { prisma } from "./prisma"
 import type { UserTier } from "@prisma/client"
 
+// Validate required environment variables
+if (!process.env.GITHUB_CLIENT_ID) {
+  throw new Error('GITHUB_CLIENT_ID is required')
+}
+if (!process.env.GITHUB_CLIENT_SECRET) {
+  throw new Error('GITHUB_CLIENT_SECRET is required')
+}
+if (!process.env.NEXTAUTH_SECRET) {
+  throw new Error('NEXTAUTH_SECRET is required')
+}
+
 declare module "next-auth" {
   interface Session {
     user: {
@@ -24,12 +35,28 @@ declare module "next-auth" {
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
+  secret: process.env.NEXTAUTH_SECRET,
   providers: [
     GitHub({
-      clientId: process.env.GITHUB_CLIENT_ID || 'dummy',
-      clientSecret: process.env.GITHUB_CLIENT_SECRET || 'dummy',
+      clientId: process.env.GITHUB_CLIENT_ID,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET,
     }),
   ],
+  session: {
+    strategy: "database",
+    maxAge: 30 * 24 * 60 * 60, // 30 days
+  },
+  cookies: {
+    sessionToken: {
+      name: "__Secure-next-auth.session-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: process.env.NODE_ENV === "production",
+      },
+    },
+  },
   callbacks: {
     async session({ session, user }) {
       if (session.user && user) {

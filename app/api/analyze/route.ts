@@ -5,36 +5,40 @@ import type { AnalysisResult, CategoryScore, Finding } from '@/types/analysis'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 
+// Validate required environment variables
+if (!process.env.ANTHROPIC_API_KEY) {
+  throw new Error('ANTHROPIC_API_KEY is required')
+}
+
 const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY || 'dummy-key-for-build',
+  apiKey: process.env.ANTHROPIC_API_KEY,
 })
 
-// Rate limiting cache
+// In-memory rate limiting for anonymous users
 const ipRequestCounts = new Map<string, { count: number; resetTime: number }>()
-
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now()
-  const limit = 5 // 5 requests per day
-  const windowMs = 24 * 60 * 60 * 1000 // 24 hours
-
-  const record = ipRequestCounts.get(ip)
-  
-  if (!record || now > record.resetTime) {
-    ipRequestCounts.set(ip, { count: 1, resetTime: now + windowMs })
-    return true
-  }
-
-  if (record.count >= limit) {
-    return false
-  }
-
-  record.count++
-  return true
-}
 
 export async function POST(request: NextRequest) {
   try {
-    const { repoUrl, owner, repo } = await request.json()
+    // Validate request size
+    const contentLength = request.headers.get('content-length')
+    if (contentLength && parseInt(contentLength) > 1024) { // 1KB limit
+      return new Response(JSON.stringify({ error: 'Request too large' }), {
+        status: 413,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    const body = await request.json()
+    
+    // Basic input validation
+    if (!body.repoUrl || !body.owner || !body.repo) {
+      return new Response(JSON.stringify({ error: 'Missing required fields' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    const { repoUrl, owner, repo } = body
     
     // Get authenticated session
     const session = await auth()
@@ -69,13 +73,52 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    // Rate limiting
-    const ip = request.headers.get('x-forwarded-for') || 'unknown'
-    if (!checkRateLimit(ip)) {
-      return new Response(JSON.stringify({ error: 'Rate limit exceeded. Try again tomorrow.' }), {
-        status: 429,
+    // Persistent rate limiting with better IP detection
+    const forwarded = request.headers.get('x-forwarded-for')
+    const realIp = request.headers.get('x-real-ip')
+    const remoteAddr = request.headers.get('remote-addr')
+    const ip = (forwarded?.split(',')[0].trim()) || realIp || remoteAddr || 'unknown'
+    
+    // Validate IP format
+    const ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^::1$|^[0-9a-fA-F:]+$/
+    if (ip !== 'unknown' && !ipRegex.test(ip)) {
+      return new Response(JSON.stringify({ error: 'Invalid request' }), {
+        status: 400,
         headers: { 'Content-Type': 'application/json' },
       })
+    }
+    
+    // Rate limiting for anonymous users
+    if (!session) {
+      const now = Date.now()
+      const resetTime = now + (24 * 60 * 60 * 1000) // 24 hours
+      const ipData = ipRequestCounts.get(ip) || { count: 0, resetTime }
+      
+      // Reset if past reset time
+      if (now > ipData.resetTime) {
+        ipData.count = 0
+        ipData.resetTime = resetTime
+      }
+      
+      // Check rate limit (3 requests per day for anonymous)
+      if (ipData.count >= 3) {
+        return new Response(JSON.stringify({ 
+          error: 'Rate limit exceeded. Sign in for more requests or try again tomorrow.',
+          reset: ipData.resetTime
+        }), {
+          status: 429,
+          headers: { 
+            'Content-Type': 'application/json',
+            'X-RateLimit-Limit': '3',
+            'X-RateLimit-Remaining': '0',
+            'X-RateLimit-Reset': ipData.resetTime.toString()
+          },
+        })
+      }
+      
+      // Increment count
+      ipData.count++
+      ipRequestCounts.set(ip, ipData)
     }
 
     // Create a streaming response

@@ -7,6 +7,12 @@ import type { AnalysisResult } from '@/types/analysis'
 
 export async function POST(request: NextRequest) {
   try {
+    // Validate request size
+    const contentLength = request.headers.get('content-length')
+    if (contentLength && parseInt(contentLength) > 512) { // 512 bytes limit
+      return new NextResponse('Request too large', { status: 413 })
+    }
+
     const session = await auth()
     
     if (!session?.user) {
@@ -23,29 +29,20 @@ export async function POST(request: NextRequest) {
       return new NextResponse('PDF export is a Pro feature', { status: 403 })
     }
     
-    const { scanId } = await request.json()
+    const body = await request.json()
     
-    // Fetch scan data
-    const scan = await prisma.scan.findUnique({
-      where: { id: scanId },
-      select: {
-        repoUrl: true,
-        owner: true,
-        repo: true,
-        overallScore: true,
-        confidence: true,
-        categories: true,
-        findings: true,
-        summary: true,
-        createdAt: true,
-      }
-    })
+    // Validate input - require scanId
+    if (!body.scanId || typeof body.scanId !== 'string') {
+      return new NextResponse('Invalid scanId', { status: 400 })
+    }
+
+    const { scanId } = body
     
-    // Ensure the scan belongs to the user (security fix)
-    const userScan = await prisma.scan.findFirst({
+    // Fetch scan data - ONLY scans belonging to the authenticated user
+    const scan = await prisma.scan.findFirst({
       where: { 
         id: scanId,
-        userId: session.user.id // Only allow users to export their own scans
+        userId: session.user.id // CRITICAL: Only allow user's own scans
       },
       select: {
         repoUrl: true,
@@ -61,11 +58,8 @@ export async function POST(request: NextRequest) {
     })
     
     if (!scan) {
-      return new NextResponse('Scan not found', { status: 404 })
+      return new NextResponse('Scan not found or access denied', { status: 404 })
     }
-    
-    // Ensure the scan belongs to the user or handle accordingly
-    // For now, we'll allow any Pro user to export any scan
     
     // Convert Prisma data to AnalysisResult format
     const result: AnalysisResult = {
@@ -83,11 +77,12 @@ export async function POST(request: NextRequest) {
     // Generate PDF
     const pdfBuffer = await renderToBuffer(PDFReport({ result }))
     
-    // Return PDF as response
+    // Return PDF as response with sanitized filename
+    const sanitizedFilename = scan.repo.replace(/[^a-zA-Z0-9_-]/g, '_')
     return new Response(pdfBuffer as unknown as BodyInit, {
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${scan.repo}-analysis.pdf"`,
+        'Content-Disposition': `attachment; filename="${sanitizedFilename}-analysis.pdf"`,
       },
     })
   } catch (error) {
