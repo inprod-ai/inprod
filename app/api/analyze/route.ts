@@ -4,37 +4,43 @@ import { ANALYSIS_CATEGORIES } from '@/types/analysis'
 import type { AnalysisResult, CategoryScore, Finding } from '@/types/analysis'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { analyzeRequestSchema } from '@/lib/validation'
+import { ANTHROPIC_API_KEY } from '@/lib/env'
+import { rateLimit } from '@/lib/rate-limit'
+import { z } from 'zod'
 
 const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
+  apiKey: ANTHROPIC_API_KEY,
 })
 
-// Rate limiting cache
-const ipRequestCounts = new Map<string, { count: number; resetTime: number }>()
-
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now()
-  const limit = 5 // 5 requests per day
-  const windowMs = 24 * 60 * 60 * 1000 // 24 hours
-
-  const record = ipRequestCounts.get(ip)
-  
-  if (!record || now > record.resetTime) {
-    ipRequestCounts.set(ip, { count: 1, resetTime: now + windowMs })
-    return true
-  }
-
-  if (record.count >= limit) {
-    return false
-  }
-
-  record.count++
-  return true
-}
+// Removed in-memory rate limiting - now using persistent database storage
 
 export async function POST(request: NextRequest) {
   try {
-    const { repoUrl, owner, repo } = await request.json()
+    // Validate request size
+    const contentLength = request.headers.get('content-length')
+    if (contentLength && parseInt(contentLength) > 1024) { // 1KB limit
+      return new Response(JSON.stringify({ error: 'Request too large' }), {
+        status: 413,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    const body = await request.json()
+    
+    // Validate input
+    const validationResult = analyzeRequestSchema.safeParse(body)
+    if (!validationResult.success) {
+      return new Response(JSON.stringify({ 
+        error: 'Invalid input', 
+        details: validationResult.error.errors.map(e => e.message)
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    const { repoUrl, owner, repo } = validationResult.data
     
     // Get authenticated session
     const session = await auth()
@@ -68,12 +74,37 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    // Rate limiting
-    const ip = request.headers.get('x-forwarded-for') || 'unknown'
-    if (!checkRateLimit(ip)) {
-      return new Response(JSON.stringify({ error: 'Rate limit exceeded. Try again tomorrow.' }), {
-        status: 429,
+    // Persistent rate limiting with better IP detection
+    const forwarded = request.headers.get('x-forwarded-for')
+    const realIp = request.headers.get('x-real-ip')
+    const remoteAddr = request.headers.get('remote-addr')
+    const ip = (forwarded?.split(',')[0].trim()) || realIp || remoteAddr || 'unknown'
+    
+    // Validate IP format
+    const ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^::1$|^[0-9a-fA-F:]+$/
+    if (ip !== 'unknown' && !ipRegex.test(ip)) {
+      return new Response(JSON.stringify({ error: 'Invalid request' }), {
+        status: 400,
         headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    
+    // Use identifier based on session or IP
+    const rateLimitId = session?.user?.id || `ip:${ip}`
+    const rateLimitResult = await rateLimit(rateLimitId, 5) // 5 requests per day
+    
+    if (!rateLimitResult.success) {
+      return new Response(JSON.stringify({ 
+        error: 'Rate limit exceeded. Try again tomorrow.',
+        reset: rateLimitResult.reset
+      }), {
+        status: 429,
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-RateLimit-Limit': '5',
+          'X-RateLimit-Remaining': rateLimitResult.remaining.toString(),
+          'X-RateLimit-Reset': rateLimitResult.reset.toString()
+        },
       })
     }
 
@@ -91,13 +122,27 @@ export async function POST(request: NextRequest) {
             } 
           }) + '\n'))
 
-          // Fetch all GitHub data in parallel for better performance
+          // Fetch GitHub data with timeout and validation
+          const fetchWithTimeout = (url: string, timeout = 10000) => {
+            return Promise.race([
+              fetch(url, {
+                headers: {
+                  'User-Agent': 'InProd-AI-Security-Scanner',
+                  'Accept': 'application/vnd.github.v3+json'
+                }
+              }),
+              new Promise<never>((_, reject) => 
+                setTimeout(() => reject(new Error('Request timeout')), timeout)
+              )
+            ])
+          }
+
           const [repoResponse, readmeResponse, languagesResponse, commitsResponse, contentsResponse] = await Promise.all([
-            fetch(`https://api.github.com/repos/${owner}/${repo}`),
-            fetch(`https://api.github.com/repos/${owner}/${repo}/readme`),
-            fetch(`https://api.github.com/repos/${owner}/${repo}/languages`),
-            fetch(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=5`), // Reduced from 10
-            fetch(`https://api.github.com/repos/${owner}/${repo}/contents`)
+            fetchWithTimeout(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`),
+            fetchWithTimeout(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`),
+            fetchWithTimeout(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/languages`),
+            fetchWithTimeout(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits?per_page=5`),
+            fetchWithTimeout(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents`)
           ])
 
           if (!repoResponse.ok) {
@@ -355,9 +400,19 @@ Respond in JSON format:
           controller.close()
 
         } catch (error) {
-          console.error('Analysis error:', error)
+          // Sanitize error messages for production
+          const sanitizedMessage = process.env.NODE_ENV === 'production' 
+            ? 'Analysis failed' 
+            : error instanceof Error ? error.message : 'Analysis failed'
+          
+          console.error('Analysis error:', {
+            message: sanitizedMessage,
+            timestamp: new Date().toISOString(),
+            ip: ip.substring(0, 10) + '***' // Partially mask IP in logs
+          })
+          
           controller.enqueue(encoder.encode(JSON.stringify({ 
-            error: error instanceof Error ? error.message : 'Analysis failed' 
+            error: sanitizedMessage
           }) + '\n'))
           controller.close()
         }
@@ -373,9 +428,17 @@ Respond in JSON format:
     })
 
   } catch (error) {
-    console.error('Request error:', error)
+    const sanitizedMessage = process.env.NODE_ENV === 'production'
+      ? 'Invalid request'
+      : error instanceof Error ? error.message : 'Invalid request'
+      
+    console.error('Request error:', {
+      message: sanitizedMessage,
+      timestamp: new Date().toISOString()
+    })
+    
     return new Response(JSON.stringify({ 
-      error: error instanceof Error ? error.message : 'Invalid request' 
+      error: sanitizedMessage
     }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },

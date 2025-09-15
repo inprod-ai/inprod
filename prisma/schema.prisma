@@ -8,6 +8,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
 }
 
 model User {
@@ -111,4 +112,13 @@ enum SubscriptionStatus {
   past_due
   trialing
   unpaid
+}
+
+model RateLimit {
+  id         String   @id @default(cuid())
+  identifier String   // IP address or user ID
+  createdAt  DateTime @default(now())
+  
+  @@index([identifier])
+  @@index([createdAt])
 }
