@@ -39,14 +39,6 @@ export async function POST(request: NextRequest) {
     // Get authenticated session
     const session = await auth()
     
-    // Rate limiting
-    const ip = request.headers.get('x-forwarded-for') || 'unknown'
-    if (!checkRateLimit(ip)) {
-      return new Response(JSON.stringify({ error: 'Rate limit exceeded. Try again tomorrow.' }), {
-        status: 429,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
     
     // Check if user has exceeded free tier limits
     if (session?.user) {
@@ -77,37 +69,12 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    // Persistent rate limiting with better IP detection
-    const forwarded = request.headers.get('x-forwarded-for')
-    const realIp = request.headers.get('x-real-ip')
-    const remoteAddr = request.headers.get('remote-addr')
-    const ip = (forwarded?.split(',')[0].trim()) || realIp || remoteAddr || 'unknown'
-    
-    // Validate IP format
-    const ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^::1$|^[0-9a-fA-F:]+$/
-    if (ip !== 'unknown' && !ipRegex.test(ip)) {
-      return new Response(JSON.stringify({ error: 'Invalid request' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-    
-    // Use identifier based on session or IP
-    const rateLimitId = session?.user?.id || `ip:${ip}`
-    const rateLimitResult = await rateLimit(rateLimitId, 5) // 5 requests per day
-    
-    if (!rateLimitResult.success) {
-      return new Response(JSON.stringify({ 
-        error: 'Rate limit exceeded. Try again tomorrow.',
-        reset: rateLimitResult.reset
-      }), {
+    // Rate limiting
+    const ip = request.headers.get('x-forwarded-for') || 'unknown'
+    if (!checkRateLimit(ip)) {
+      return new Response(JSON.stringify({ error: 'Rate limit exceeded. Try again tomorrow.' }), {
         status: 429,
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-RateLimit-Limit': '5',
-          'X-RateLimit-Remaining': rateLimitResult.remaining.toString(),
-          'X-RateLimit-Reset': rateLimitResult.reset.toString()
-        },
+        headers: { 'Content-Type': 'application/json' },
       })
     }
 

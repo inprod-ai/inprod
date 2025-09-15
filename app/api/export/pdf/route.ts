@@ -4,16 +4,9 @@ import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import PDFReport from '@/components/PDFReport'
 import type { AnalysisResult } from '@/types/analysis'
-import { pdfExportSchema } from '@/lib/validation'
 
 export async function POST(request: NextRequest) {
   try {
-    // Validate request size
-    const contentLength = request.headers.get('content-length')
-    if (contentLength && parseInt(contentLength) > 512) { // 512 bytes limit
-      return new NextResponse('Request too large', { status: 413 })
-    }
-
     const session = await auth()
     
     if (!session?.user) {
@@ -30,21 +23,7 @@ export async function POST(request: NextRequest) {
       return new NextResponse('PDF export is a Pro feature', { status: 403 })
     }
     
-    const body = await request.json()
-    
-    // Validate input
-    const validationResult = pdfExportSchema.safeParse(body)
-    if (!validationResult.success) {
-      return new NextResponse(JSON.stringify({
-        error: 'Invalid input',
-        details: validationResult.error.errors.map(e => e.message)
-      }), { 
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      })
-    }
-
-    const { scanId } = validationResult.data
+    const { scanId } = await request.json()
     
     // Fetch scan data
     const scan = await prisma.scan.findUnique({

@@ -1,7 +1,6 @@
 import Stripe from 'stripe'
-import { STRIPE_SECRET_KEY } from './env'
 
-export const stripe = new Stripe(STRIPE_SECRET_KEY, {
+export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2024-12-18.acacia',
   typescript: true,
 })
