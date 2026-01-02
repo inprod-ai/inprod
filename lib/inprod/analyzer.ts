@@ -1,20 +1,16 @@
 // =============================================================================
-// COMPLETENESS ANALYZER - Main Orchestrator
+// MAIN ANALYZER - Combines all category analyzers + altitude calculation
 // =============================================================================
 
-import { 
-  CompletenessAnalysis, 
-  CategoryScore, 
-  RepoContext, 
+import {
+  CategoryScore,
+  CompletenessAnalysis,
+  RepoContext,
   RepoFile,
-  CompletionPlan,
-  CATEGORIES,
-  PLATFORM_CATEGORIES,
-  CATEGORY_LABELS,
-  Gap,
-  Category,
+  AltitudeResult,
 } from './types'
 import { detectTechStack } from './stack-detector'
+import { calculateAltitude, formatUserCount, getAltitudeMessage, getAltitudeProgress } from './altitude'
 import {
   analyzeFrontend,
   analyzeBackend,
@@ -30,97 +26,56 @@ import {
   analyzeDeployment,
 } from './analyzers'
 
-const CATEGORY_ANALYZERS = {
-  frontend: analyzeFrontend,
-  backend: analyzeBackend,
-  database: analyzeDatabase,
-  authentication: analyzeAuthentication,
-  apiIntegrations: analyzeApiIntegrations,
-  stateManagement: analyzeStateManagement,
-  designUx: analyzeDesignUx,
-  testing: analyzeTesting,
-  security: analyzeSecurity,
-  errorHandling: analyzeErrorHandling,
-  versionControl: analyzeVersionControl,
-  deployment: analyzeDeployment,
+export interface FullAnalysisResult extends CompletenessAnalysis {
+  altitude: AltitudeResult
+  altitudeProgress: number // 0-100 for visual
+  altitudeMessage: string
+  formattedMaxUsers: string
 }
 
 /**
- * Analyze a repository for production readiness across 12 categories
+ * Run all category analyzers and calculate altitude
  */
-export async function analyzeCompleteness(
-  repoUrl: string,
-  files: RepoFile[]
-): Promise<CompletenessAnalysis> {
-  // Detect tech stack
-  const techStack = detectTechStack(files)
-  
-  // Find package.json
-  const packageJsonFile = files.find(f => f.path === 'package.json')
-  const packageJson = packageJsonFile 
-    ? JSON.parse(packageJsonFile.content) 
-    : undefined
-  
-  // Find README
-  const readmeFile = files.find(f => f.path.toLowerCase() === 'readme.md')
-  const readme = readmeFile?.content
-  
-  // Build context
-  const ctx: RepoContext = {
-    files,
-    techStack,
-    packageJson,
-    readme,
-  }
-  
-  // Get applicable categories for this platform
-  const applicableCategories = PLATFORM_CATEGORIES[techStack.platform] || CATEGORIES
-  
-  // Run analyzers for applicable categories only
-  const categories: CategoryScore[] = []
-  for (const category of CATEGORIES) {
-    if (applicableCategories.includes(category)) {
-      // Run the analyzer
-      const analyzer = CATEGORY_ANALYZERS[category]
-      const result = analyzer(ctx)
-      categories.push(result)
-    } else {
-      // Mark as N/A - doesn't apply to this platform
-      categories.push({
-        category,
-        label: CATEGORY_LABELS[category],
-        score: 100, // N/A = 100% (not a gap)
-        detected: [`Not applicable for ${techStack.platform} projects`],
-        gaps: [],
-        canGenerate: false,
-      })
-    }
-  }
-  
-  // Calculate overall score (weighted average)
-  const weights = getWeights(techStack)
-  let totalWeight = 0
-  let weightedScore = 0
-  
-  for (const cat of categories) {
-    const weight = weights[cat.category] || 1
-    weightedScore += cat.score * weight
-    totalWeight += weight
-  }
-  
-  const overallScore = Math.round(weightedScore / totalWeight)
-  
-  // Aggregate gaps
+export function analyzeRepository(ctx: RepoContext): FullAnalysisResult {
+  // Run all category analyzers
+  const categories: CategoryScore[] = [
+    analyzeFrontend(ctx),
+    analyzeBackend(ctx),
+    analyzeDatabase(ctx),
+    analyzeAuthentication(ctx),
+    analyzeApiIntegrations(ctx),
+    analyzeStateManagement(ctx),
+    analyzeDesignUx(ctx),
+    analyzeTesting(ctx),
+    analyzeSecurity(ctx),
+    analyzeErrorHandling(ctx),
+    analyzeVersionControl(ctx),
+    analyzeDeployment(ctx),
+  ]
+
+  // Calculate overall score (weighted average of applicable categories)
+  const applicableCategories = categories.filter(c => c.score < 100 || c.gaps.length > 0)
+  const overallScore = applicableCategories.length > 0
+    ? Math.round(applicableCategories.reduce((sum, c) => sum + c.score, 0) / applicableCategories.length)
+    : 100
+
+  // Calculate altitude
+  const altitude = calculateAltitude(categories)
+  const altitudeProgress = getAltitudeProgress(altitude.maxUsers)
+  const altitudeMessage = getAltitudeMessage(altitude.zone)
+  const formattedMaxUsers = formatUserCount(altitude.maxUsers)
+
+  // Collect all gaps
   const allGaps = categories.flatMap(c => c.gaps)
   const blockerCount = allGaps.filter(g => g.severity === 'blocker').length
   const criticalCount = allGaps.filter(g => g.severity === 'critical').length
   const warningCount = allGaps.filter(g => g.severity === 'warning').length
   const estimatedFixMinutes = allGaps.reduce((sum, g) => sum + (g.effortMinutes || 0), 0)
   const canAutoFix = allGaps.filter(g => g.fixType === 'instant').length
-  
+
   return {
-    repoUrl,
-    techStack,
+    repoUrl: '', // Set by caller
+    techStack: ctx.techStack,
     overallScore,
     categories,
     totalGaps: allGaps.length,
@@ -129,134 +84,120 @@ export async function analyzeCompleteness(
     warningCount,
     estimatedFixMinutes,
     canAutoFix,
+    altitude,
+    altitudeProgress,
+    altitudeMessage,
+    formattedMaxUsers,
   }
 }
 
 /**
- * Generate a completion plan from the analysis
+ * Get a summary of altitude status for display
  */
-export function generateCompletionPlan(analysis: CompletenessAnalysis): CompletionPlan {
-  const categoriesWithGaps = analysis.categories
-    .filter(c => c.gaps.length > 0)
-    .map(c => ({
-      category: c.category,
-      gaps: c.gaps,
-      estimatedFiles: c.gaps.length * 2, // Rough estimate
-      estimatedMinutes: c.gaps.reduce((sum, g) => sum + (g.effortMinutes || 15), 0),
-    }))
-  
-  // Sort by priority (blockers first, then by score)
-  const priority = prioritizeCategories(analysis.categories)
-  
+export function getAltitudeSummary(result: FullAnalysisResult): {
+  headline: string
+  subtext: string
+  cta: string
+} {
+  const { altitude, formattedMaxUsers } = result
+
+  if (altitude.maxUsers < 100) {
+    return {
+      headline: `🛬 Grounded at ${formattedMaxUsers} users`,
+      subtext: `${altitude.bottleneck.category} is blocking takeoff: ${altitude.bottleneck.reason}`,
+      cta: `Fix ${altitude.bottleneck.category} to clear for takeoff`,
+    }
+  }
+
+  if (altitude.maxUsers < 10000) {
+    return {
+      headline: `✈️ Flying at ${formattedMaxUsers} user altitude`,
+      subtext: `${altitude.bottleneck.category} limits scale: ${altitude.bottleneck.reason}`,
+      cta: `Upgrade ${altitude.bottleneck.category} to reach ${formatUserCount(altitude.potentialUsers)} users`,
+    }
+  }
+
+  if (altitude.maxUsers < 100000) {
+    return {
+      headline: `🚀 Cruising at ${formattedMaxUsers} user altitude`,
+      subtext: `Bottleneck: ${altitude.bottleneck.category} - ${altitude.bottleneck.reason}`,
+      cta: altitude.topUpgrades.length > 0
+        ? `Quick win: ${altitude.topUpgrades[0].category} → ${formatUserCount(altitude.topUpgrades[0].potentialUsers)} users`
+        : 'Looking good! Minor optimizations available.',
+    }
+  }
+
+  if (altitude.maxUsers < 1000000) {
+    return {
+      headline: `🛰️ Near space: ${formattedMaxUsers} user capacity`,
+      subtext: `Enterprise-ready. ${altitude.bottleneck.category} is the limiting factor.`,
+      cta: `Scale to ${formatUserCount(altitude.potentialUsers)} with targeted improvements`,
+    }
+  }
+
   return {
-    categories: categoriesWithGaps,
-    totalFiles: categoriesWithGaps.reduce((sum, c) => sum + c.estimatedFiles, 0),
-    totalMinutes: categoriesWithGaps.reduce((sum, c) => sum + c.estimatedMinutes, 0),
-    priority,
+    headline: `🌌 Orbit achieved: ${formattedMaxUsers}+ users`,
+    subtext: 'Your codebase can handle serious scale.',
+    cta: altitude.topUpgrades.length > 0
+      ? `Push further: ${altitude.topUpgrades[0].category} upgrade available`
+      : 'Maintaining peak altitude. 🎉',
   }
 }
 
 /**
- * Prioritize categories for fixing
+ * Analyze a repo from URL and files (test-friendly interface)
  */
-function prioritizeCategories(categories: CategoryScore[]): CategoryScore['category'][] {
-  const sorted = [...categories].sort((a, b) => {
-    // First: categories with blockers
-    const aBlockers = a.gaps.filter(g => g.severity === 'blocker').length
-    const bBlockers = b.gaps.filter(g => g.severity === 'blocker').length
-    if (aBlockers !== bBlockers) return bBlockers - aBlockers
-    
-    // Second: categories with critical issues
-    const aCritical = a.gaps.filter(g => g.severity === 'critical').length
-    const bCritical = b.gaps.filter(g => g.severity === 'critical').length
-    if (aCritical !== bCritical) return bCritical - aCritical
-    
-    // Third: lowest score first
-    return a.score - b.score
-  })
+export async function analyzeCompleteness(repoUrl: string, files: RepoFile[]): Promise<FullAnalysisResult> {
+  // Build context from files
+  const packageJsonFile = files.find(f => f.path === 'package.json')
+  let packageJson: Record<string, unknown> | undefined
+  try {
+    packageJson = packageJsonFile ? JSON.parse(packageJsonFile.content) : undefined
+  } catch {
+    packageJson = undefined
+  }
+  const readmeFile = files.find(f => f.path.toLowerCase() === 'readme.md')
   
-  return sorted
-    .filter(c => c.gaps.length > 0)
-    .map(c => c.category)
-}
-
-/**
- * Get category weights based on tech stack
- */
-function getWeights(techStack: RepoContext['techStack']): Record<string, number> {
-  const base = {
-    frontend: 1,
-    backend: 1,
-    database: 1,
-    authentication: 1,
-    apiIntegrations: 1,
-    stateManagement: 0.8,
-    designUx: 0.8,
-    testing: 1.2,
-    security: 1.5, // Security is always important
-    errorHandling: 1,
-    versionControl: 0.8,
-    deployment: 1.2,
+  const techStack = detectTechStack(files)
+  
+  const ctx: RepoContext = {
+    files,
+    techStack,
+    packageJson,
+    readme: readmeFile?.content,
   }
   
-  // Adjust weights based on platform
-  if (techStack.platform === 'web') {
-    base.frontend = 1.2
-    base.designUx = 1
-  } else if (techStack.platform === 'backend') {
-    base.frontend = 0.5
-    base.designUx = 0.3
-    base.stateManagement = 0.3
-  } else if (techStack.platform === 'ios' || techStack.platform === 'android') {
-    base.designUx = 1.2
-    base.deployment = 0.8
+  const result = analyzeRepository(ctx)
+  return {
+    ...result,
+    repoUrl,
   }
-  
-  return base
 }
 
 /**
- * Get instant-fix gaps from analysis
+ * Format analysis result as a text summary
  */
-export function getInstantFixGaps(analysis: CompletenessAnalysis): Gap[] {
-  return analysis.categories
-    .flatMap(c => c.gaps)
-    .filter(g => g.fixType === 'instant')
-    .sort((a, b) => {
-      // Sort by severity
-      const severityOrder = { blocker: 0, critical: 1, warning: 2, info: 3 }
-      return severityOrder[a.severity] - severityOrder[b.severity]
-    })
-}
-
-/**
- * Format analysis as summary text
- */
-export function formatAnalysisSummary(analysis: CompletenessAnalysis): string {
+export function formatAnalysisSummary(result: FullAnalysisResult): string {
   const lines: string[] = []
   
-  lines.push(`# Production Readiness: ${analysis.overallScore}%`)
-  lines.push('')
-  lines.push(`Tech Stack: ${analysis.techStack.frameworks.join(', ')} (${analysis.techStack.platform})`)
-  lines.push(`Maturity: ${analysis.techStack.maturityLevel}`)
-  lines.push('')
-  lines.push('## Category Scores')
-  lines.push('')
-  
-  for (const cat of analysis.categories) {
-    const bar = '█'.repeat(Math.floor(cat.score / 10)) + '░'.repeat(10 - Math.floor(cat.score / 10))
-    lines.push(`${cat.label.padEnd(18)} ${bar} ${cat.score}%`)
-  }
-  
-  lines.push('')
-  lines.push('## Issues')
-  lines.push('')
-  lines.push(`- Blockers: ${analysis.blockerCount}`)
-  lines.push(`- Critical: ${analysis.criticalCount}`)
-  lines.push(`- Warnings: ${analysis.warningCount}`)
-  lines.push(`- Auto-fixable: ${analysis.canAutoFix}`)
-  lines.push(`- Est. fix time: ${Math.round(analysis.estimatedFixMinutes / 60)}h ${analysis.estimatedFixMinutes % 60}m`)
+  lines.push(`# Production Readiness Report`)
+  lines.push(``)
+  lines.push(`**Overall Score:** ${result.overallScore}/100`)
+  lines.push(`**Max Users:** ${result.formattedMaxUsers}`)
+  lines.push(`**Altitude:** ${result.altitude.zone.displayName}`)
+  lines.push(``)
+  lines.push(`## Tech Stack`)
+  lines.push(`- Platform: ${result.techStack.platform}`)
+  lines.push(`- Frameworks: ${result.techStack.frameworks.join(', ') || 'None detected'}`)
+  lines.push(`- Languages: ${result.techStack.languages.join(', ') || 'None detected'}`)
+  lines.push(``)
+  lines.push(`## Category Scores`)
+  result.categories.forEach(cat => {
+    lines.push(`- **${cat.label}:** ${cat.score}/100 (${cat.gaps.length} gaps)`)
+  })
+  lines.push(``)
+  lines.push(`## Bottleneck`)
+  lines.push(`${result.altitude.bottleneck.category}: ${result.altitude.bottleneck.reason}`)
   
   return lines.join('\n')
 }
-

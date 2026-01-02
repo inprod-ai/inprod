@@ -1,7 +1,65 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+
+// =============================================================================
+// ALTITUDE BACKGROUND UTILITIES
+// =============================================================================
+
+// Get visual progress (0-100) from max users for background animation
+function getAltitudeProgress(maxUsers: number): number {
+  if (maxUsers === Infinity) return 100
+  if (maxUsers <= 0) return 0
+  
+  // Log scale: 10 users = ~0%, 10B users = 100%
+  const logUsers = Math.log10(Math.max(1, maxUsers))
+  const logMin = 1 // 10 users
+  const logMax = 10 // 10B users
+  
+  const progress = ((logUsers - logMin) / (logMax - logMin)) * 100
+  return Math.max(0, Math.min(100, progress))
+}
+
+// Generate background gradient based on altitude progress
+function getAltitudeGradient(progress: number): string {
+  // Color stops for the journey from ground to space
+  const stops = [
+    { at: 0, color: 'rgb(74, 85, 104)' },      // Gray runway
+    { at: 10, color: 'rgb(34, 139, 34)' },      // Green ground
+    { at: 25, color: 'rgb(135, 206, 235)' },    // Sky blue (troposphere)
+    { at: 40, color: 'rgb(70, 130, 180)' },     // Steel blue (stratosphere)
+    { at: 55, color: 'rgb(25, 25, 112)' },      // Midnight blue (mesosphere)
+    { at: 70, color: 'rgb(75, 0, 130)' },       // Indigo/purple (thermosphere)
+    { at: 85, color: 'rgb(25, 10, 50)' },       // Dark purple (exosphere)
+    { at: 100, color: 'rgb(5, 5, 15)' },        // Near black space
+  ]
+  
+  // Find the two stops we're between
+  let fromStop = stops[0]
+  let toStop = stops[stops.length - 1]
+  
+  for (let i = 0; i < stops.length - 1; i++) {
+    if (progress >= stops[i].at && progress < stops[i + 1].at) {
+      fromStop = stops[i]
+      toStop = stops[i + 1]
+      break
+    }
+  }
+  
+  // Interpolate between the stops
+  const range = toStop.at - fromStop.at
+  const localProgress = range > 0 ? (progress - fromStop.at) / range : 0
+  
+  // Create gradient showing current zone transitioning to next
+  return `linear-gradient(to top, ${fromStop.color} 0%, ${toStop.color} 100%)`
+}
+
+// Stars visibility (0-1) based on altitude - stars appear at 40%+
+function getStarsVisibility(progress: number): number {
+  if (progress < 40) return 0
+  return Math.min(1, (progress - 40) / 40) // Full at 80%
+}
 
 // =============================================================================
 // TYPES
@@ -372,14 +430,14 @@ interface LeaderboardEntry {
 
 export function Leaderboard({ entries }: { entries: LeaderboardEntry[] }) {
   return (
-    <div className="bg-gray-900/50 rounded-xl border border-gray-800">
-      <div className="p-4 border-b border-gray-800">
+    <div className="rounded-xl">
+      <div className="p-4 border-b border-white/10">
         <h3 className="text-lg font-semibold text-gray-200 flex items-center gap-2">
           <span>🏆</span> Altitude Leaderboard
         </h3>
       </div>
       
-      <div className="divide-y divide-gray-800">
+      <div className="divide-y divide-white/10">
         {entries.map((entry) => {
           const levelInfo = ALTITUDE_LEVELS[entry.level]
           
@@ -450,6 +508,21 @@ export function AltitudeDemo() {
   const [analyzingIndex, setAnalyzingIndex] = useState(0)
   const [report, setReport] = useState<AltitudeReport | null>(null)
 
+  // Calculate altitude progress for background animation
+  const altitudeProgress = useMemo(() => {
+    if (isAnalyzing) {
+      // During analysis, progress based on how many parts checked
+      return (analyzingIndex / ROCKET_PARTS.length) * 30 // Max 30% during analysis
+    }
+    if (report) {
+      return getAltitudeProgress(report.maxUsers)
+    }
+    return 0
+  }, [isAnalyzing, analyzingIndex, report])
+
+  const backgroundGradient = useMemo(() => getAltitudeGradient(altitudeProgress), [altitudeProgress])
+  const starsOpacity = useMemo(() => getStarsVisibility(altitudeProgress), [altitudeProgress])
+
   // Simulate analysis
   useEffect(() => {
     if (!isAnalyzing) return
@@ -503,53 +576,145 @@ export function AltitudeDemo() {
   ]
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 p-8">
-      <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold mb-8 text-center">
-          🚀 Altitude System Demo
-        </h1>
-        
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Rocket Visualization */}
-          <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-6">
-            <RocketVisualization 
-              report={report}
-              isAnalyzing={isAnalyzing}
-              analyzingCategory={isAnalyzing ? ROCKET_PARTS[analyzingIndex]?.id : null}
-            />
+    <div className="min-h-screen relative overflow-hidden">
+      {/* Animated Background - transitions from ground to space */}
+      <motion.div
+        className="fixed inset-0 -z-20 transition-all duration-1000"
+        animate={{ background: backgroundGradient }}
+        transition={{ duration: 1.5, ease: 'easeInOut' }}
+      />
+      
+      {/* Stars Layer - fades in at high altitude */}
+      <motion.div
+        className="fixed inset-0 -z-10 pointer-events-none"
+        animate={{ opacity: starsOpacity }}
+        transition={{ duration: 1 }}
+        style={{
+          backgroundImage: `
+            radial-gradient(1px 1px at 5% 10%, rgba(255,255,255,0.9), transparent),
+            radial-gradient(1px 1px at 10% 25%, rgba(255,255,255,0.7), transparent),
+            radial-gradient(2px 2px at 15% 5%, rgba(255,255,255,1), transparent),
+            radial-gradient(1px 1px at 20% 40%, rgba(255,255,255,0.6), transparent),
+            radial-gradient(1px 1px at 25% 15%, rgba(255,255,255,0.8), transparent),
+            radial-gradient(2px 2px at 30% 70%, rgba(255,255,255,0.9), transparent),
+            radial-gradient(1px 1px at 35% 30%, rgba(255,255,255,0.5), transparent),
+            radial-gradient(1px 1px at 40% 55%, rgba(255,255,255,0.7), transparent),
+            radial-gradient(2px 2px at 45% 20%, rgba(255,255,255,1), transparent),
+            radial-gradient(1px 1px at 50% 80%, rgba(255,255,255,0.6), transparent),
+            radial-gradient(1px 1px at 55% 45%, rgba(255,255,255,0.8), transparent),
+            radial-gradient(2px 2px at 60% 10%, rgba(255,255,255,0.9), transparent),
+            radial-gradient(1px 1px at 65% 60%, rgba(255,255,255,0.5), transparent),
+            radial-gradient(1px 1px at 70% 35%, rgba(255,255,255,0.7), transparent),
+            radial-gradient(2px 2px at 75% 85%, rgba(255,255,255,1), transparent),
+            radial-gradient(1px 1px at 80% 50%, rgba(255,255,255,0.6), transparent),
+            radial-gradient(1px 1px at 85% 25%, rgba(255,255,255,0.8), transparent),
+            radial-gradient(2px 2px at 90% 65%, rgba(255,255,255,0.9), transparent),
+            radial-gradient(1px 1px at 95% 40%, rgba(255,255,255,0.5), transparent),
+            radial-gradient(1px 1px at 3% 75%, rgba(255,255,255,0.7), transparent),
+            radial-gradient(2px 2px at 8% 90%, rgba(255,255,255,1), transparent),
+            radial-gradient(1px 1px at 13% 50%, rgba(255,255,255,0.6), transparent),
+            radial-gradient(1px 1px at 18% 65%, rgba(255,255,255,0.8), transparent),
+            radial-gradient(2px 2px at 23% 85%, rgba(255,255,255,0.9), transparent),
+            radial-gradient(1px 1px at 28% 45%, rgba(255,255,255,0.5), transparent),
+            radial-gradient(1px 1px at 33% 95%, rgba(255,255,255,0.7), transparent),
+            radial-gradient(2px 2px at 38% 8%, rgba(255,255,255,1), transparent),
+            radial-gradient(1px 1px at 43% 72%, rgba(255,255,255,0.6), transparent),
+            radial-gradient(1px 1px at 48% 3%, rgba(255,255,255,0.8), transparent),
+            radial-gradient(2px 2px at 53% 58%, rgba(255,255,255,0.9), transparent),
+            radial-gradient(1px 1px at 58% 92%, rgba(255,255,255,0.5), transparent),
+            radial-gradient(1px 1px at 63% 18%, rgba(255,255,255,0.7), transparent),
+            radial-gradient(2px 2px at 68% 78%, rgba(255,255,255,1), transparent),
+            radial-gradient(1px 1px at 73% 42%, rgba(255,255,255,0.6), transparent),
+            radial-gradient(1px 1px at 78% 12%, rgba(255,255,255,0.8), transparent),
+            radial-gradient(2px 2px at 83% 68%, rgba(255,255,255,0.9), transparent),
+            radial-gradient(1px 1px at 88% 32%, rgba(255,255,255,0.5), transparent),
+            radial-gradient(1px 1px at 93% 88%, rgba(255,255,255,0.7), transparent),
+            radial-gradient(2px 2px at 98% 22%, rgba(255,255,255,1), transparent)
+          `,
+          backgroundSize: '100% 100%',
+        }}
+      />
+      
+      {/* Clouds layer - visible only at low altitudes */}
+      <motion.div
+        className="fixed inset-0 -z-10 pointer-events-none"
+        animate={{ opacity: altitudeProgress < 25 ? 0.3 : 0 }}
+        transition={{ duration: 1 }}
+        style={{
+          backgroundImage: `
+            radial-gradient(ellipse 80px 30px at 15% 70%, rgba(255,255,255,0.4), transparent),
+            radial-gradient(ellipse 120px 40px at 45% 80%, rgba(255,255,255,0.3), transparent),
+            radial-gradient(ellipse 100px 35px at 75% 65%, rgba(255,255,255,0.35), transparent),
+            radial-gradient(ellipse 90px 25px at 25% 85%, rgba(255,255,255,0.25), transparent),
+            radial-gradient(ellipse 110px 45px at 85% 75%, rgba(255,255,255,0.4), transparent)
+          `,
+          backgroundSize: '100% 100%',
+        }}
+      />
+
+      {/* Content */}
+      <div className="relative z-10 text-gray-100 p-8">
+        <div className="max-w-6xl mx-auto">
+          <h1 className="text-3xl font-bold mb-8 text-center drop-shadow-lg">
+            🚀 Altitude System Demo
+          </h1>
+          
+          {/* Altitude Progress Indicator */}
+          <div className="text-center mb-6 text-sm text-white/60">
+            Altitude: {altitudeProgress.toFixed(0)}% • 
+            {altitudeProgress < 10 ? ' 🛬 Runway' :
+             altitudeProgress < 25 ? ' ☁️ Troposphere' :
+             altitudeProgress < 40 ? ' ✈️ Stratosphere' :
+             altitudeProgress < 55 ? ' 🌤️ Mesosphere' :
+             altitudeProgress < 70 ? ' 💜 Thermosphere' :
+             altitudeProgress < 85 ? ' 🌌 Exosphere' :
+             ' ⭐ Deep Space'}
           </div>
           
-          {/* Category Breakdown */}
-          <div className="space-y-6">
-            {report && (
-              <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-6">
-                <h3 className="text-lg font-semibold mb-4">Component Status</h3>
-                <CategoryList 
-                  categories={report.categories}
-                  onFix={(id) => alert(`Generating fixes for ${id}...`)}
-                />
-              </div>
-            )}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {/* Rocket Visualization */}
+            <div className="bg-black/30 backdrop-blur-sm rounded-xl border border-white/10 p-6">
+              <RocketVisualization 
+                report={report}
+                isAnalyzing={isAnalyzing}
+                analyzingCategory={isAnalyzing ? ROCKET_PARTS[analyzingIndex]?.id : null}
+              />
+            </div>
+            
+            {/* Category Breakdown */}
+            <div className="space-y-6">
+              {report && (
+                <div className="bg-black/30 backdrop-blur-sm rounded-xl border border-white/10 p-6">
+                  <h3 className="text-lg font-semibold mb-4">Component Status</h3>
+                  <CategoryList 
+                    categories={report.categories}
+                    onFix={(id) => alert(`Generating fixes for ${id}...`)}
+                  />
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-        
-        {/* Leaderboard */}
-        <div className="mt-8">
-          <Leaderboard entries={demoLeaderboard} />
-        </div>
-        
-        {/* Reset button */}
-        <div className="mt-8 text-center">
-          <button
-            onClick={() => {
-              setIsAnalyzing(true)
-              setAnalyzingIndex(0)
-              setReport(null)
-            }}
-            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
-          >
-            Run Analysis Again
-          </button>
+          
+          {/* Leaderboard */}
+          <div className="mt-8">
+            <div className="bg-black/30 backdrop-blur-sm rounded-xl border border-white/10 overflow-hidden">
+              <Leaderboard entries={demoLeaderboard} />
+            </div>
+          </div>
+          
+          {/* Reset button */}
+          <div className="mt-8 text-center">
+            <button
+              onClick={() => {
+                setIsAnalyzing(true)
+                setAnalyzingIndex(0)
+                setReport(null)
+              }}
+              className="px-6 py-3 bg-white/10 backdrop-blur-sm text-white rounded-lg hover:bg-white/20 border border-white/20 transition-all"
+            >
+              Run Analysis Again
+            </button>
+          </div>
         </div>
       </div>
     </div>
