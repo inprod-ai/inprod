@@ -79,7 +79,11 @@ export function analyzeSecurity(ctx: RepoContext): CategoryScore {
   
   let hasHardcodedSecrets = false
   for (const file of files) {
-    if (file.path.includes('node_modules') || file.path.includes('.env')) continue
+    // Skip non-code files
+    if (file.path.includes('node_modules') || 
+        file.path.includes('.env') || 
+        file.path.startsWith('docs/') ||
+        file.path.endsWith('.md')) continue
     for (const pattern of secretPatterns) {
       if (pattern.test(file.content)) {
         hasHardcodedSecrets = true
