@@ -142,12 +142,19 @@ export function analyzeSecurity(ctx: RepoContext): CategoryScore {
   }
 
   // 6. Check for SQL injection protection (15 points)
-  const hasRawSQL = files.some(f => 
-    f.content.includes('${}') && f.content.includes('SELECT') ||
-    f.content.includes("' + ") && f.content.includes('query')
+  // If using an ORM like Prisma or Drizzle, SQL injection is handled
+  const usesORM = deps['@prisma/client'] || deps['prisma'] || 
+                  deps['drizzle-orm'] || deps['typeorm'] || deps['sequelize']
+  
+  const hasRawSQL = !usesORM && files.some(f => 
+    (f.content.includes('${') && f.content.includes('SELECT')) ||
+    (f.content.includes("' + ") && f.content.includes('query'))
   )
   
-  if (!hasRawSQL) {
+  if (usesORM) {
+    detected.push('Using ORM for SQL injection protection')
+    score += 15
+  } else if (!hasRawSQL) {
     detected.push('No SQL injection patterns detected')
     score += 15
   } else {
