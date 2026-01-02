@@ -327,7 +327,7 @@
 │  │  │  Found:                                                         │  │   │
 │  │  │    host: 'localhost',                                           │  │   │
 │  │  │    user: 'postgres',                                            │  │   │
-│  │  │    password: 'password123',  ← Example password                 │  │   │
+│  │  │    password: '<PLACEHOLDER>',  ← Example password                │  │   │
 │  │  │                                                                 │  │   │
 │  │  │  [View suggested fix: use environment variables]                │  │   │
 │  │  └────────────────────────────────────────────────────────────────┘  │   │
