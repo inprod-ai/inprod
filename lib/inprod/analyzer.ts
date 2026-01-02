@@ -201,3 +201,51 @@ export function formatAnalysisSummary(result: FullAnalysisResult): string {
   
   return lines.join('\n')
 }
+
+/**
+ * Get all gaps that can be fixed instantly (auto-fix)
+ */
+export function getInstantFixGaps(result: FullAnalysisResult): import('./types').Gap[] {
+  return result.categories.flatMap(c => c.gaps.filter(g => g.fixType === 'instant'))
+}
+
+/**
+ * Generate a completion plan prioritizing critical gaps
+ */
+export function generateCompletionPlan(result: FullAnalysisResult): import('./types').CompletionPlan {
+  const priorityOrder: import('./types').Category[] = [
+    'security',
+    'testing',
+    'errorHandling',
+    'authentication',
+    'database',
+    'backend',
+    'deployment',
+    'apiIntegrations',
+    'versionControl',
+    'frontend',
+    'stateManagement',
+    'designUx',
+  ]
+  
+  const categoryPlans = result.categories
+    .filter(c => c.gaps.length > 0)
+    .map(c => ({
+      category: c.category,
+      gaps: c.gaps,
+      estimatedFiles: c.gaps.filter(g => g.fixType === 'instant').length,
+      estimatedMinutes: c.gaps.reduce((sum, g) => sum + (g.effortMinutes || 0), 0),
+    }))
+    .sort((a, b) => {
+      const aIndex = priorityOrder.indexOf(a.category)
+      const bIndex = priorityOrder.indexOf(b.category)
+      return aIndex - bIndex
+    })
+  
+  return {
+    categories: categoryPlans,
+    totalFiles: categoryPlans.reduce((sum, c) => sum + c.estimatedFiles, 0),
+    totalMinutes: categoryPlans.reduce((sum, c) => sum + c.estimatedMinutes, 0),
+    priority: categoryPlans.map(c => c.category),
+  }
+}
