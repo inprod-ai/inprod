@@ -19,7 +19,7 @@ export function detectTechStack(files: RepoFile[]): TechStack {
     : {}
 
   // Detect platform
-  const platform = detectPlatform(filePaths, fileSet)
+  const platform = detectPlatform(filePaths, fileSet, packageJson)
   
   // Detect languages
   const languages = detectLanguages(filePaths)
@@ -58,7 +58,11 @@ export function detectTechStack(files: RepoFile[]): TechStack {
   }
 }
 
-function detectPlatform(paths: string[], fileSet: Set<string>): TechStack['platform'] {
+function detectPlatform(
+  paths: string[], 
+  fileSet: Set<string>,
+  packageJson: Record<string, any> | null
+): TechStack['platform'] {
   // iOS
   if (paths.some(p => p.endsWith('.xcodeproj') || p.endsWith('.xcworkspace') || p === 'Package.swift')) {
     return 'ios'
@@ -69,22 +73,44 @@ function detectPlatform(paths: string[], fileSet: Set<string>): TechStack['platf
     return 'android'
   }
   
-  // Monorepo
+  // Monorepo - check for workspace configs or packages/ directory
   if (fileSet.has('pnpm-workspace.yaml') || fileSet.has('lerna.json') || fileSet.has('turbo.json')) {
     return 'monorepo'
   }
+  if (packageJson?.workspaces || paths.some(p => p.startsWith('packages/'))) {
+    return 'monorepo'
+  }
   
-  // CLI
+  // CLI - Go or Node.js CLI tools
   if (fileSet.has('go.mod') && !paths.some(p => p.includes('/api/') || p.includes('/server/'))) {
     return 'cli'
   }
+  if (packageJson?.bin) {
+    return 'cli'
+  }
   
-  // Library (no app/ or pages/ directory = likely a library)
-  const pkgFile = paths.find(p => p === 'package.json')
-  const hasAppDir = paths.some(p => p.startsWith('app/') || p.includes('/app/'))
-  const hasPagesDir = paths.some(p => p.startsWith('pages/') || p.includes('/pages/'))
-  if (pkgFile && !hasAppDir && !hasPagesDir) {
-    return 'library'
+  // Library detection - much smarter now
+  if (packageJson) {
+    // Strong library signals: has exports, main, module, or types but no app structure
+    const hasExports = packageJson.exports || packageJson.main || packageJson.module
+    const hasTypes = packageJson.types || packageJson.typings
+    const hasAppDir = paths.some(p => p.startsWith('app/') || p.includes('/app/'))
+    const hasPagesDir = paths.some(p => p.startsWith('pages/') || p.includes('/pages/'))
+    const hasSrcIndex = paths.some(p => p === 'src/index.ts' || p === 'src/index.js' || p === 'index.ts' || p === 'index.js')
+    
+    // If it has exports/main/module AND no app/pages structure AND no server = library
+    if (hasExports && !hasAppDir && !hasPagesDir) {
+      // Double-check it's not a server with just an index.js
+      const hasServerCode = paths.some(p => p.includes('server.') || p.includes('/routes/'))
+      if (!hasServerCode) {
+        return 'library'
+      }
+    }
+    
+    // If it exports types AND has tests = definitely a library
+    if (hasTypes && hasSrcIndex && paths.some(p => p.includes('test') || p.includes('spec'))) {
+      return 'library'
+    }
   }
   
   // Backend

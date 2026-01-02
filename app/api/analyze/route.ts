@@ -194,6 +194,55 @@ export async function POST(request: NextRequest) {
           const hasPackageJson = fileNames.has('package.json')
           const hasRequirements = fileNames.has('requirements.txt') || fileNames.has('pyproject.toml') || fileNames.has('pipfile')
           const hasEnvExample = fileNames.has('.env.example') || fileNames.has('.env.sample')
+          
+          // Detect project type more intelligently
+          const hasPackagesDir = contents.some((item: any) => item.name === 'packages' && item.type === 'dir')
+          const hasSrcDir = contents.some((item: any) => item.name === 'src' && item.type === 'dir')
+          const hasAppDir = contents.some((item: any) => item.name === 'app' && item.type === 'dir')
+          const hasPagesDir = contents.some((item: any) => item.name === 'pages' && item.type === 'dir')
+          
+          // Fetch package.json if exists to understand project type
+          let packageJsonData: any = null
+          if (hasPackageJson) {
+            try {
+              const pkgResponse = await fetchWithTimeout(
+                `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/package.json`
+              )
+              if (pkgResponse.ok) {
+                const pkgContent = await pkgResponse.json()
+                packageJsonData = JSON.parse(Buffer.from(pkgContent.content, 'base64').toString())
+              }
+            } catch { /* ignore */ }
+          }
+          
+          // Determine project type
+          let projectType: 'app' | 'library' | 'framework' | 'monorepo' | 'cli' | 'unknown' = 'unknown'
+          let projectTypeReason = ''
+          
+          if (hasPackagesDir || packageJsonData?.workspaces) {
+            projectType = 'monorepo'
+            projectTypeReason = 'Has packages/ directory or workspaces config'
+          } else if (packageJsonData?.bin) {
+            projectType = 'cli'
+            projectTypeReason = 'Has bin field in package.json'
+          } else if (packageJsonData?.main || packageJsonData?.module || packageJsonData?.exports) {
+            if (!hasAppDir && !hasPagesDir) {
+              // Check if it's a framework (used by many, foundational)
+              if (repoData.stargazers_count > 10000 && repoData.forks_count > 1000) {
+                projectType = 'framework'
+                projectTypeReason = 'Exports code, high stars/forks, no app structure = framework/library'
+              } else {
+                projectType = 'library'
+                projectTypeReason = 'Has main/module/exports but no app/ or pages/'
+              }
+            } else {
+              projectType = 'app'
+              projectTypeReason = 'Has app/ or pages/ directory'
+            }
+          } else if (hasAppDir || hasPagesDir) {
+            projectType = 'app'
+            projectTypeReason = 'Has app/ or pages/ directory'
+          }
 
           // Calculate confidence score
           const confidenceFactors = []
@@ -223,6 +272,9 @@ export async function POST(request: NextRequest) {
             description: repoData.description,
             languages: Object.keys(languages),
             primaryLanguage: repoData.language,
+            // Project type detection (CRITICAL for accurate analysis)
+            projectType,
+            projectTypeReason,
             hasReadme,
             hasTests,
             hasCI,
@@ -230,6 +282,18 @@ export async function POST(request: NextRequest) {
             hasPackageJson,
             hasRequirements,
             hasEnvExample,
+            // Structure info
+            hasPackagesDir,
+            hasSrcDir,
+            hasAppDir,
+            hasPagesDir,
+            // package.json fields if available
+            hasExports: !!packageJsonData?.exports,
+            hasMainModule: !!packageJsonData?.main || !!packageJsonData?.module,
+            hasBin: !!packageJsonData?.bin,
+            hasWorkspaces: !!packageJsonData?.workspaces,
+            peerDependencies: packageJsonData?.peerDependencies ? Object.keys(packageJsonData.peerDependencies) : [],
+            // Repo metrics
             stars: repoData.stargazers_count,
             forks: repoData.forks_count,
             openIssues: repoData.open_issues_count,
@@ -247,29 +311,72 @@ export async function POST(request: NextRequest) {
             } 
           }) + '\n'))
 
-          const prompt = `Analyze this GitHub repository for production readiness focusing on Security (40%), Performance (30%), and Best Practices (30%).
+          // Build project-type-aware prompt
+          const projectTypeGuidance = {
+            framework: `This is a FRAMEWORK/LIBRARY (like React, Vue, lodash).
+CRITICAL SCORING RULES FOR FRAMEWORKS:
+- Testing: Score based on test coverage RATIO, not just "tests exist". Frameworks typically have extensive tests.
+- Security: Focus on library-specific concerns (prototype pollution, XSS vectors in rendering, etc.)
+- Performance: Bundle size, tree-shaking, build optimization
+- NOT APPLICABLE: Authentication, Database, Frontend (it IS the frontend tool), Deployment (users deploy, not the lib)
+- Best Practices: TypeScript types, API stability, changelog, semantic versioning, docs quality`,
+            
+            library: `This is a LIBRARY (reusable code published to npm/PyPI/etc).
+SCORING RULES FOR LIBRARIES:
+- Testing: Critical - libraries need thorough unit tests
+- Security: Dependency audit, no vulnerable patterns
+- NOT APPLICABLE: Authentication, Database, Deployment (unless it's a deployment tool)
+- Best Practices: Types, exports, documentation, examples`,
+            
+            monorepo: `This is a MONOREPO with multiple packages.
+SCORING RULES FOR MONOREPOS:
+- Evaluate the overall architecture and shared tooling
+- Testing: Look for test infrastructure across packages
+- CI/CD: Critical - needs build/test orchestration`,
+            
+            cli: `This is a CLI TOOL.
+SCORING RULES FOR CLI TOOLS:
+- Testing: Command tests, argument parsing tests
+- NOT APPLICABLE: Frontend, Design/UX (unless it's a TUI), Database (unless it uses one)
+- Best Practices: Error messages, help text, exit codes`,
+            
+            app: `This is a WEB APPLICATION.
+Apply standard web app scoring across all categories.`,
+            
+            unknown: `Could not determine project type. Apply general best practices.`
+          }
+          
+          const prompt = `Analyze this GitHub repository for production readiness.
+
+PROJECT TYPE: ${projectType.toUpperCase()}
+${projectTypeGuidance[projectType]}
 
 Repository Context:
 ${JSON.stringify(context, null, 2)}
 
-IMPORTANT: Be concise in your responses. Focus on the most critical issues. Each finding description should be 1-2 sentences max.
+CRITICAL INSTRUCTIONS:
+1. Score ONLY categories that apply to this project type. Mark others as "applicable": false.
+2. For libraries/frameworks with hasTests=true, assume good test coverage unless proven otherwise.
+3. High stars+forks suggests mature, battle-tested code - don't give low scores without evidence.
+4. Be specific to this project type - don't suggest "add authentication" to a utility library.
+5. Each finding must be actionable and RELEVANT to what this project actually is.
 
-Provide a comprehensive analysis with:
+Provide analysis with:
 
-1. Category Scores for:
+1. Category Scores for applicable categories only:
 ${ANALYSIS_CATEGORIES.map(cat => `- ${cat.name} (weight: ${cat.weight}%)`).join('\n')}
 
-2. Top 5-7 actionable findings that would improve the score, each with:
-   - Clear title and description
+2. Top 3-5 actionable findings SPECIFIC to this project type:
+   - Clear title and description (1-2 sentences)
    - Category (security/performance/best-practices)
    - Severity (critical/high/medium/low)
-   - Points that would be added if fixed (critical: 8-10, high: 5-7, medium: 2-4, low: 1)
-   - Effort level (easy/medium/hard) and time estimate
-   - Specific fix instructions
+   - Points (critical: 8-10, high: 5-7, medium: 2-4, low: 1)
+   - Effort level and time estimate
+   - Specific fix (relevant to project type)
 
-3. Summary with strengths, weaknesses, and priorities
+3. Summary acknowledging what the project IS
 
-Respond in JSON format:
+Respond in JSON:
 {
   "overallScore": number,
   "categories": [
