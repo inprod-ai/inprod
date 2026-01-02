@@ -38,7 +38,9 @@
   "exclude": [
     "node_modules",
     "tests",
+    "e2e",
     "vitest.config.ts",
-    "vitest.setup.ts"
+    "vitest.setup.ts",
+    "playwright.config.ts"
   ]
 }
