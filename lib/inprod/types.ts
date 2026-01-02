@@ -46,6 +46,36 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   deployment: 'Deployment',
 }
 
+// Which categories apply to which platform types
+export const PLATFORM_CATEGORIES: Record<TechStack['platform'], Category[]> = {
+  web: ['frontend', 'backend', 'database', 'authentication', 'apiIntegrations', 'stateManagement', 'designUx', 'testing', 'security', 'errorHandling', 'versionControl', 'deployment'],
+  ios: ['designUx', 'testing', 'security', 'errorHandling', 'versionControl', 'deployment', 'stateManagement'],
+  android: ['designUx', 'testing', 'security', 'errorHandling', 'versionControl', 'deployment', 'stateManagement'],
+  backend: ['backend', 'database', 'authentication', 'apiIntegrations', 'testing', 'security', 'errorHandling', 'versionControl', 'deployment'],
+  cli: ['testing', 'security', 'errorHandling', 'versionControl', 'deployment'],
+  library: ['testing', 'security', 'versionControl'],
+  monorepo: ['frontend', 'backend', 'database', 'authentication', 'apiIntegrations', 'stateManagement', 'designUx', 'testing', 'security', 'errorHandling', 'versionControl', 'deployment'],
+}
+
+// Platform-specific category overrides (e.g., iOS uses XCTest not Vitest)
+export const PLATFORM_OVERRIDES: Partial<Record<TechStack['platform'], Partial<Record<Category, { label: string; checks: string[] }>>>> = {
+  ios: {
+    testing: { label: 'Testing (XCTest)', checks: ['XCTest', 'Quick/Nimble', 'Fastlane scan'] },
+    deployment: { label: 'App Store', checks: ['Fastlane', 'Xcode Cloud', 'TestFlight', 'App Store Connect'] },
+    security: { label: 'iOS Security', checks: ['Keychain', 'ATS', 'Entitlements', 'Privacy Manifest'] },
+  },
+  android: {
+    testing: { label: 'Testing (JUnit)', checks: ['JUnit', 'Espresso', 'Robolectric'] },
+    deployment: { label: 'Play Store', checks: ['Fastlane', 'Google Play Console', 'Firebase App Distribution'] },
+  },
+  cli: {
+    deployment: { label: 'Distribution', checks: ['Homebrew', 'npm', 'cargo', 'goreleaser'] },
+  },
+  library: {
+    deployment: { label: 'Publishing', checks: ['npm', 'PyPI', 'crates.io', 'Maven Central'] },
+  },
+}
+
 export type Severity = 'blocker' | 'critical' | 'warning' | 'info'
 export type Confidence = 'proven' | 'verified' | 'high' | 'likely' | 'possible'
 export type FixType = 'instant' | 'suggested' | 'guided'

@@ -9,7 +9,10 @@ import {
   RepoFile,
   CompletionPlan,
   CATEGORIES,
+  PLATFORM_CATEGORIES,
+  CATEGORY_LABELS,
   Gap,
+  Category,
 } from './types'
 import { detectTechStack } from './stack-detector'
 import {
@@ -70,12 +73,28 @@ export async function analyzeCompleteness(
     readme,
   }
   
-  // Run all analyzers
+  // Get applicable categories for this platform
+  const applicableCategories = PLATFORM_CATEGORIES[techStack.platform] || CATEGORIES
+  
+  // Run analyzers for applicable categories only
   const categories: CategoryScore[] = []
   for (const category of CATEGORIES) {
-    const analyzer = CATEGORY_ANALYZERS[category]
-    const result = analyzer(ctx)
-    categories.push(result)
+    if (applicableCategories.includes(category)) {
+      // Run the analyzer
+      const analyzer = CATEGORY_ANALYZERS[category]
+      const result = analyzer(ctx)
+      categories.push(result)
+    } else {
+      // Mark as N/A - doesn't apply to this platform
+      categories.push({
+        category,
+        label: CATEGORY_LABELS[category],
+        score: 100, // N/A = 100% (not a gap)
+        detected: [`Not applicable for ${techStack.platform} projects`],
+        gaps: [],
+        canGenerate: false,
+      })
+    }
   }
   
   // Calculate overall score (weighted average)

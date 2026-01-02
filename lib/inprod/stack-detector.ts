@@ -79,9 +79,11 @@ function detectPlatform(paths: string[], fileSet: Set<string>): TechStack['platf
     return 'cli'
   }
   
-  // Library
+  // Library (no app/ or pages/ directory = likely a library)
   const pkgFile = paths.find(p => p === 'package.json')
-  if (pkgFile && !paths.some(p => p.includes('/app/') || p.includes('/pages/'))) {
+  const hasAppDir = paths.some(p => p.startsWith('app/') || p.includes('/app/'))
+  const hasPagesDir = paths.some(p => p.startsWith('pages/') || p.includes('/pages/'))
+  if (pkgFile && !hasAppDir && !hasPagesDir) {
     return 'library'
   }
   
