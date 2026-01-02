@@ -53,10 +53,11 @@ async function fetchRepoFiles(repoUrl: string): Promise<RepoFile[]> {
   const [, owner, repo] = match
   const cleanRepo = repo.replace(/\.git$/, '')
   
-  // Fetch repo tree
+  // Fetch repo tree (no-store to bypass cache)
   const treeRes = await fetch(
     `https://api.github.com/repos/${owner}/${cleanRepo}/git/trees/HEAD?recursive=1`,
     {
+      cache: 'no-store',
       headers: {
         Accept: 'application/vnd.github.v3+json',
         ...(process.env.GITHUB_TOKEN && {
@@ -98,6 +99,7 @@ async function fetchRepoFiles(repoUrl: string): Promise<RepoFile[]> {
           const contentRes = await fetch(
             `https://api.github.com/repos/${owner}/${cleanRepo}/contents/${item.path}`,
             {
+              cache: 'no-store',
               headers: {
                 Accept: 'application/vnd.github.v3.raw',
                 ...(process.env.GITHUB_TOKEN && {
