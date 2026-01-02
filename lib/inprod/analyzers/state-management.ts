@@ -41,11 +41,17 @@ export function analyzeStateManagement(ctx: RepoContext): CategoryScore {
   }
 
   // 2. Check for data fetching library (25 points)
+  // For Next.js App Router, Server Components handle data fetching natively
+  const isNextAppRouter = deps['next'] && files.some(f => f.path.includes('app/'))
   const hasDataFetching = deps['@tanstack/react-query'] || deps['react-query'] || 
                           deps['swr'] || deps['@apollo/client'] || deps['urql']
   
   if (hasDataFetching) {
     detected.push('Data fetching library configured')
+    score += 25
+  } else if (isNextAppRouter) {
+    // Next.js App Router uses Server Components for data fetching
+    detected.push('Using Next.js Server Components for data fetching')
     score += 25
   } else {
     gaps.push({

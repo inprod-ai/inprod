@@ -108,11 +108,20 @@ export function analyzeDatabase(ctx: RepoContext): CategoryScore {
   }
 
   // 5. Check for backup strategy (10 points)
-  // This is hard to detect, so we'll be lenient
-  if (techStack.database === 'supabase' || techStack.database === 'planetscale' || techStack.database === 'neon') {
+  // Managed databases have automatic backups
+  const managedDbs = ['supabase', 'planetscale', 'neon', 'firebase']
+  const isManaged = managedDbs.includes(techStack.database || '') ||
+    // Also check for Neon/Supabase in connection strings
+    files.some(f => 
+      (f.path.includes('.env') || f.path.includes('database')) && 
+      (f.content.includes('neon.tech') || f.content.includes('supabase') || 
+       f.content.includes('planetscale') || f.content.includes('aws.neon'))
+    )
+  
+  if (isManaged) {
     detected.push('Managed database with automatic backups')
     score += 10
-  } else {
+  } else if (techStack.database) {
     gaps.push({
       id: 'database-no-backups',
       category: 'database',
@@ -123,6 +132,8 @@ export function analyzeDatabase(ctx: RepoContext): CategoryScore {
       fixType: 'guided',
       effortMinutes: 30,
     })
+  } else {
+    score += 10 // No database, not applicable
   }
 
   return {
