@@ -3,6 +3,7 @@ import GitHub from "next-auth/providers/github"
 import { PrismaAdapter } from "@auth/prisma-adapter"
 import { prisma } from "./prisma"
 import type { UserTier } from "@prisma/client"
+import type { Adapter } from "next-auth/adapters"
 
 // Validate required environment variables
 if (!process.env.GITHUB_CLIENT_ID) {
@@ -34,7 +35,7 @@ declare module "next-auth" {
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: PrismaAdapter(prisma),
+  adapter: PrismaAdapter(prisma) as Adapter,
   secret: process.env.NEXTAUTH_SECRET,
   providers: [
     GitHub({

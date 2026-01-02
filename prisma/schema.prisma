@@ -68,10 +68,11 @@ model Scan {
   repoUrl     String
   owner       String
   repo        String
+  source      String   @default("web") // "web" or "cli"
   
   // Results
   overallScore Float
-  confidence   Json     // {level, score, factors}
+  confidence   Json?    // {level, score, factors}
   categories   Json     // Array of category scores
   findings     Json     // Array of findings
   summary      Json     // {strengths, weaknesses, topPriorities}
@@ -82,6 +83,7 @@ model Scan {
   
   @@index([userId])
   @@index([createdAt])
+  @@index([source])
 }
 
 model Subscription {
@@ -116,9 +118,13 @@ enum SubscriptionStatus {
 
 model RateLimit {
   id         String   @id @default(cuid())
-  identifier String   // IP address or user ID
+  key        String   @unique // Unique identifier (IP, user ID, or state key)
+  identifier String?  // IP address or user ID (deprecated, use key)
+  count      Int      @default(0)
+  resetAt    DateTime @default(now())
   createdAt  DateTime @default(now())
   
   @@index([identifier])
   @@index([createdAt])
+  @@index([resetAt])
 }
